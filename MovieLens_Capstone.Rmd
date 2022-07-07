@@ -1,0 +1,232 @@
+---
+title: "MovieLens Capstone Project for HarvardX PH125.9 Course"
+author: "Rob Henderson"
+date: '2022-07-07'
+output: pdf_document:
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+------------------------------------------------------------------------
+
+#Introduction
+
+This MovieLens Project is one of two projects for the Capstone portion of the HarvardX Data Science Course. Using information and techniques learned in the online course, as well as the provided dataset, the aim of this project is to develop and train a machine learning to Predict a Rating that will be given by a user for a movie.
+
+The Residual Mean Square Error (RMSE) will be used to evaluate the accuracy of the Machine Learning Algorithm. For this project, the required criteria is an RMSE lower than 0.8775.
+
+This report will offer an overview of the provided data, analysis and results of modeling that data and a conclusion.
+
+##Initial Summary of Data Provided
+
+First, we download and supplied dataset for the course, using the instructions provided.
+
+```{r, echo=TRUE, message=FALSE}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1) # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+The dataset contains the variables userId, movieId, rating, timestamp, title and genres. These variables are the columns and the rows of the dataset correspond to each user's rating of a movie.
+
+Looking at a summary of the dataset, we find that there are no missing values and that movies are rated between 0.5 and 5. We can also see that the mean rating given to movies is 3.512.
+
+```{r, echo=TRUE, message=FALSE}
+### Data Analysis ###
+
+head(edx)
+summary(edx)
+```
+
+Examining the dataset further, we can see that there are 10,677 unique movies, 797 unique genres and 69,878 unique users.
+```{r, echo=TRUE, message=FALSE}
+# Unique Movies, Genres and Users in the Dataset
+edx %>%
+summarize(unique_movies = n_distinct(movieId),
+          unique_genres = n_distinct(genres),
+            unique_users = n_distinct(userId))
+```
+
+Looking at a distribution of the ratings, we can see that users generally tend to rate movies between 3 and 5. It is also clear that users tend to rate movies as whole numbers, rather than half ratings.
+
+```{r, echo=TRUE, message=FALSE}
+# Distribution of Ratings
+edx %>%
+  ggplot(aes(rating)) +
+  geom_histogram(binwidth = 0.25, color = "black") +
+  scale_y_continuous(breaks = c(seq(0, 3000000, 500000))) +
+  xlab("Rating Given") +
+  ylab("Number of Ratings") +
+  ggtitle("Distribution of Ratings")
+```
+
+Further analysis shows that most users rate between 10 and 100 movies.
+
+# Number of Ratings Per User
+edx %>% 
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(binwidth = 0.15, color = "black") +
+  scale_x_log10() +
+  xlab("Number of Ratings") +
+  ylab("Number of Users") +
+  ggtitle("Number of Ratings Per User") 
+
+##Analyzing the Data Further
+
+# Mean Rating Given by Users
+
+edx %>%
+  group_by(userId) %>%
+  filter(n() >= 100) %>%
+  summarize(b_u = mean(rating)) %>%
+  ggplot(aes(b_u)) +
+  geom_histogram(bins = 30, color = "black") +
+  xlab("Mean Rating Given") +
+  ylab("Number of Users") +
+  ggtitle("Mean Rating Given by Users") +
+  scale_x_discrete(limits = c(seq(0.5,5,0.5))) 
+
+#Predicting Using the Mean
+mu <- mean(edx$rating)
+mu
+
+rmse_mean <- RMSE(validation$rating, mu)
+rmse_mean
+
+rmse_results = tibble(method = "Naive Analysis by Mean", RMSE = rmse_mean)
+rmse_results
+
+# Model Using the Movie Effect Bias Term
+
+mu <- mean(edx$rating)
+
+movie_averages <- edx %>%
+  group_by(movieId) %>%
+  summarise(b_i = mean(rating - mu))
+
+predicted_ratings <- mu + validation %>%
+  left_join(movie_averages, by='movieId') %>%
+  pull(b_i)
+
+rmse_model_movie_effects <- RMSE(predicted_ratings, validation$rating)
+rmse_model_movie_effects
+rmse_results <- bind_rows(rmse_results, 
+                          data_frame(method="Movie Bias Model",
+                                     RMSE = rmse_model_movie_effects))
+
+rmse_results
+
+## User Effects Model
+## Simple model taking into account the user effects, b_u
+user_averages <- edx %>%
+  left_join(movie_averages, by="movieId") %>%
+  group_by(userId) %>%
+  summarise(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- validation %>%
+  left_join(movie_averages, by='movieId') %>%
+  left_join(user_averages, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+rmse_model_user_effects <- RMSE(predicted_ratings, validation$rating)
+rmse_model_user_effects
+rmse_results <- bind_rows(rmse_results, 
+                          data_frame(method="Movie and User Bias Model",
+                                     RMSE = rmse_model_user_effects))
+
+rmse_results
+
+
+## Regularization of Data
+
+lambdas <- seq(0, 10, 0.25)
+rmses <- sapply(lambdas, function(l){
+  
+  mu <- mean(edx$rating)
+  
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n() +l))
+  
+  b_u <- edx %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  predicted_ratings <- validation %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    pull(pred)
+  
+  return(RMSE(predicted_ratings, validation$rating))
+  
+})
+rmse_regularization <- min(rmses)
+rmse_regularization
+
+# Plot RMSE against Lambdas to find optimal lambda
+qplot(lambdas, rmses)
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+rmse_results <- bind_rows(rmse_results, 
+                          data_frame(method="Regularization",
+                                     RMSE = rmse_model_user_effects))
+
+## Final results
+rmse_results
